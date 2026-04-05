@@ -1,0 +1,131 @@
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LogisticRegression
+import sys
+import warnings
+
+# Suppress warnings for cleaner terminal output
+warnings.filterwarnings('ignore')
+
+def predict_user_reason():
+    # 1. Load Data
+    try:
+        df = pd.read_csv('responses of March.csv')
+    except FileNotFoundError:
+        print("Error: 'responses of March.csv' not found. Please ensure it is in the same directory.")
+        sys.exit(1)
+        
+    # CRITICAL FIX: Strip any leading/trailing whitespace from column names to prevent KeyErrors
+    df.columns = df.columns.str.strip()
+    df = df.dropna()
+    
+    # Define exact Target Column Name
+    target_col = '5. For your immediate daily needs, what do you prefer?'
+    
+    # Filter out "Depends on situation" to give a precise binary prediction
+    df = df[df[target_col].isin(['Quick commerce apps', 'Local shops'])]
+    
+    # Define Features exactly as they appear in the cleaned CSV headers
+    feature_cols = [
+        '1. Age Group:', 
+        '2. Occupation:',
+        '3. Do you use quick commerce apps like Blinkit or Zepto? If yes, how often you use them ?',
+        '4. How often do you shop from local retail/ kirana stores?',
+        '6. What is the main reason for your preference?',
+        '7. Do Delivery charges influence your decision to use apps?',
+        '8. Which option do you think is more cost-effective?',
+        '9. Overall, which option do you trust more for quality products?'
+    ]
+    
+    # Verify all feature columns exist to prevent the KeyError
+    for col in feature_cols:
+        if col not in df.columns:
+            print(f"CRITICAL ERROR: Column '{col}' not found in CSV.")
+            print("Available columns are:")
+            print(df.columns.tolist())
+            sys.exit(1)
+            
+    X = df[feature_cols]
+    y = (df[target_col] == 'Quick commerce apps').astype(int) # 1 = Quick Commerce, 0 = Local Shops
+    
+    # 4. Data Preprocessing & Model Training using get_dummies
+    X_encoded = pd.get_dummies(X, drop_first=True)
+    # Save the exact column structure from the training data
+    training_columns = X_encoded.columns.tolist() 
+    
+    # Initialize and train Logistic Regression
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X_encoded, y)
+    coefs = model.coef_[0] # Factors strength
+    
+    print("\n=== Retail Choice Predictor Model Trained Successfully ===\n")
+    print("Please answer the following questions to get your prediction:\n")
+    
+    # 5. Interactive User Input Loop (Pulls EXACT options from CSV)
+    user_input = {}
+    for col in feature_cols:
+        # Extract exact unique values for this specific column from the dataset
+        options = df[col].unique().tolist()
+        print(f"{col}")
+        for i, opt in enumerate(options, 1):
+            print(f"  {i}. {opt}")
+        
+        while True:
+            try:
+                choice = int(input(f"Select an option (1-{len(options)}): "))
+                if 1 <= choice <= len(options):
+                    user_input[col] = options[choice-1]
+                    break
+                else:
+                    print(f"Invalid choice. Please select a number between 1 and {len(options)}.")
+            except ValueError:
+                print("Please enter a valid number.")
+        print("-" * 50)
+                
+    # 6. Predict for the new user
+    user_df = pd.DataFrame([user_input])
+    
+    # Convert user input to dummies
+    user_encoded = pd.get_dummies(user_df)
+    
+    # CRITICAL FIX for Dummies: Align the user's encoded columns with the model's training columns.
+    # If a category was in training but not in user input, it fills it with 0.
+    user_encoded = user_encoded.reindex(columns=training_columns, fill_value=0)
+    
+    # Get probability of class 1 (Quick Commerce)
+    prob = model.predict_proba(user_encoded)[0][1]
+    
+    # 7. Calculate Feature Contributions for Factor Analysis/Reasoning
+    user_vector = user_encoded.iloc[0].values
+    contributions = user_vector * coefs
+    feat_contrib = {training_columns[i]: contributions[i] for i in range(len(training_columns)) if user_vector[i] > 0}
+    
+    if prob >= 0.5:
+        choice_text = "Quick commerce apps"
+        sorted_feats = sorted(feat_contrib.items(), key=lambda x: x[1], reverse=True)
+    else:
+        choice_text = "Local shops"
+        sorted_feats = sorted(feat_contrib.items(), key=lambda x: x[1])
+
+    # Extract top 3 features
+    top_features = {k: abs(v) for k, v in sorted_feats[:3]}
+    
+    # Display prediction (Matching your exact requested format)
+    print(f"\nYou are most likely to opt for {choice_text}.")
+    print(f"Probability of Quick Commerce: {prob*100:.2f}%")
+    print(f"Probability of Local Shop: {(1-prob)*100:.2f}%\n")
+
+    if top_features:
+        print("Reason based on your input and survey (Panacea):")
+        for feat, val in top_features.items():
+            # Clean up the dummy variable name (e.g., '1. Age Group:_14-30 years' -> '14-30 years')
+            readable = str(feat).split("_")[-1]
+            print(f"- {readable} influenced this prediction with strength {val:.2f}")
+    else:
+        print("Reason could not be determined clearly.")
+
+    print("\nThank you for using the Retail Choice Predictor. Exiting program.")
+    sys.exit(0)
+
+if __name__ == "__main__":
+    predict_user_reason()
